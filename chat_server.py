@@ -172,6 +172,7 @@ def chat():
     )
 
     result = response.json()
+    print(f"Groq response: {result}")
     if "choices" not in result:
         error_msg = result.get("error", {}).get("message", "неизвестная ошибка")
         print(f"Groq error: {error_msg}")
