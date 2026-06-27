@@ -82,9 +82,11 @@ def send_telegram(text):
 
 def send_to_sheets(name, contact, connection, source="чат сайта"):
     try:
+        # Убираем + чтобы Google Sheets не воспринимал как формулу
+        phone_safe = contact.lstrip("+")
         requests.post(SHEETS_URL, json={
             "name": name,
-            "phone": contact,
+            "phone": phone_safe,
             "service": "",
             "comment": f"Способ связи: {connection}" if connection and connection != "не указан" else "",
             "source": source
