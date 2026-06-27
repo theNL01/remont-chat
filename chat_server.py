@@ -172,6 +172,10 @@ def chat():
     )
 
     result = response.json()
+    if "choices" not in result:
+        error_msg = result.get("error", {}).get("message", "неизвестная ошибка")
+        print(f"Groq error: {error_msg}")
+        return jsonify({"reply": "Извините, сервис временно недоступен. Позвоните нам: +7 (999) 123-45-67"})
     reply = result["choices"][0]["message"]["content"]
 
     if "[ЗАЯВКА:" in reply:
