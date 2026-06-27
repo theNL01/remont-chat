@@ -101,8 +101,10 @@ def chat():
                 phone = tag.split("телефон=")[1].split("]")[0].strip()
 
             # Отправляем уведомление только если есть реальное имя И телефон
-            name_valid = name and len(name) >= 4 and re.search(r"[а-яёА-ЯЁa-zA-Z]{3,}", name)
-            if name_valid and phone and is_valid_phone(phone):
+            fake = ["ИМЯ", "ТЕЛЕФОН", "имя", "телефон", "NAME", "PHONE"]
+            name_valid = name and len(name) >= 4 and re.search(r"[а-яёА-ЯЁa-zA-Z]{3,}", name) and name.strip() not in fake
+            phone_valid = phone and is_valid_phone(phone) and phone.strip() not in fake
+            if name_valid and phone_valid:
                 send_telegram(
                     f"🔔 *Новая заявка с сайта!*\n\n"
                     f"👤 *Имя:* {name}\n"
