@@ -7,6 +7,9 @@ from flask_cors import CORS
 import requests
 import re
 import os
+import sys
+
+os.environ["PYTHONUNBUFFERED"] = "1"
 
 app = Flask(__name__)
 CORS(app)
@@ -172,10 +175,11 @@ def chat():
     )
 
     result = response.json()
-    print(f"Groq response: {result}")
+    print(f"Groq response status: {response.status_code}", flush=True)
+    print(f"Groq response: {result}", flush=True)
     if "choices" not in result:
         error_msg = result.get("error", {}).get("message", "неизвестная ошибка")
-        print(f"Groq error: {error_msg}")
+        print(f"Groq error: {error_msg}", flush=True)
         return jsonify({"reply": "Извините, сервис временно недоступен. Позвоните нам: +7 (999) 123-45-67"})
     reply = result["choices"][0]["message"]["content"]
 
