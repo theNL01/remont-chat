@@ -80,15 +80,20 @@ def send_telegram(text):
     })
 
 
-def send_to_sheets(name, contact, connection, source="чат сайта"):
+def send_to_sheets(name, contact, service_or_connection, source="чат сайта", is_chat=False):
     try:
-        # Убираем + чтобы Google Sheets не воспринимал как формулу
         phone_safe = contact.lstrip("+")
+        if is_chat:
+            comment = f"Способ связи: {service_or_connection}" if service_or_connection and service_or_connection != "не указан" else ""
+            service = ""
+        else:
+            comment = ""
+            service = service_or_connection
         requests.post(SHEETS_URL, json={
             "name": name,
             "phone": phone_safe,
-            "service": "",
-            "comment": f"Способ связи: {connection}" if connection and connection != "не указан" else "",
+            "service": service,
+            "comment": comment,
             "source": source
         }, timeout=10)
     except Exception as e:
@@ -193,7 +198,7 @@ def chat():
                     f"📋 *Переписка:*\n{history}\n\n"
                     f"⏰ Связаться в течение 30 минут!"
                 )
-                send_to_sheets(name, contact, connection, source="чат сайта")
+                send_to_sheets(name, contact, connection, source="чат сайта", is_chat=True)
 
             reply = reply[:tag_start].strip()
         except Exception:
