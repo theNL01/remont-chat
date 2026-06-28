@@ -18,7 +18,7 @@ GROQ_API_KEY      = "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"
 TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
 ADMIN_CHAT_ID     = "7661738693"
 SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
-REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
+MODELSLAB_API_KEY = os.environ.get("MODELSLAB_API_KEY", "")
 
 SYSTEM_PROMPT = """Ты — консультант компании "Ремонт Загорянка". 
 
@@ -283,11 +283,10 @@ import time
 def visualize():
     try:
         data = request.json or {}
-        image_b64   = data.get("image")
-        style       = data.get("style", "modern")
-        room        = data.get("room", "living")
-        color       = data.get("color", "")
-        user_prompt = data.get("user_prompt", "").strip()
+        image_b64  = data.get("image")
+        style      = data.get("style", "modern")
+        room       = data.get("room", "living")
+        color      = data.get("color", "")
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
@@ -301,51 +300,69 @@ def visualize():
             prompt += f" {color_text}."
         prompt += " Professional interior photography, high quality, photorealistic result."
 
-        # Запускаем предсказание через Replicate (flux-kontext-pro)
-        run_resp = requests.post(
-            "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions",
-            headers={
-                "Authorization": f"Bearer {REPLICATE_API_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "wait"
-            },
+        negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
+
+        # Шаг 1: загружаем изображение на ModelsLab через upload API
+        upload_resp = requests.post(
+            "https://modelslab.com/api/v6/realtime/upload",
+            headers={"Content-Type": "application/json"},
             json={
-                "input": {
-                    "prompt": prompt,
-                    "input_image": f"data:image/jpeg;base64,{image_b64}",
-                    "output_format": "jpg",
-                    "safety_tolerance": 2
-                }
+                "key": MODELSLAB_API_KEY,
+                "image": image_b64
+            },
+            timeout=30
+        )
+        upload_data = upload_resp.json()
+        print(f"ModelsLab upload response: {upload_data}", flush=True)
+
+        image_url = upload_data.get("link") or upload_data.get("url") or upload_data.get("output")
+        if not image_url:
+            # Если upload не сработал — пробуем передать base64 напрямую
+            image_url = f"data:image/jpeg;base64,{image_b64}"
+
+        # Шаг 2: вызываем Room Decorator
+        gen_resp = requests.post(
+            "https://modelslab.com/api/v6/interior/room_decorator",
+            headers={"Content-Type": "application/json"},
+            json={
+                "key": MODELSLAB_API_KEY,
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "init_image": image_url,
+                "strength": 0.8,
+                "guidance_scale": 10,
+                "num_inference_steps": 51,
+                "base64": False,
+                "temp": False,
+                "seed": 0
             },
             timeout=120
         )
+        result = gen_resp.json()
+        print(f"ModelsLab room_decorator response: {result}", flush=True)
 
-        result = run_resp.json()
-        print(f"Replicate response: {result}", flush=True)
-
-        # Если prefer=wait не сработал — поллим
-        if result.get("status") in ("starting", "processing"):
-            pred_id = result.get("id")
-            for _ in range(30):
-                time.sleep(3)
-                poll = requests.get(
-                    f"https://api.replicate.com/v1/predictions/{pred_id}",
-                    headers={"Authorization": f"Bearer {REPLICATE_API_KEY}"}
-                ).json()
-                if poll.get("status") == "succeeded":
-                    result = poll
-                    break
-                if poll.get("status") == "failed":
-                    return jsonify({"error": "generation failed"}), 500
+        # Если processing — поллим fetch API
+        if result.get("status") == "processing":
+            fetch_url = result.get("fetch_result")
+            if fetch_url:
+                for _ in range(20):
+                    time.sleep(4)
+                    poll = requests.post(
+                        fetch_url,
+                        headers={"Content-Type": "application/json"},
+                        json={"key": MODELSLAB_API_KEY},
+                        timeout=30
+                    ).json()
+                    print(f"ModelsLab poll: {poll}", flush=True)
+                    if poll.get("status") == "success":
+                        result = poll
+                        break
 
         output = result.get("output")
-        if isinstance(output, list):
-            output = output[0]
+        if isinstance(output, list) and len(output) > 0:
+            return jsonify({"image_url": output[0]})
 
-        if not output:
-            return jsonify({"error": "no output from model"}), 500
-
-        return jsonify({"image_url": output})
+        return jsonify({"error": "no output", "detail": result}), 500
 
     except Exception as e:
         print(f"Visualize error: {e}", flush=True)
