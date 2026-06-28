@@ -14,10 +14,11 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 app = Flask(__name__)
 CORS(app)
 
-GROQ_API_KEY   = "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"
-TELEGRAM_TOKEN = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
-ADMIN_CHAT_ID  = "7661738693"
-SHEETS_URL     = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
+GROQ_API_KEY      = "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"
+TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
+ADMIN_CHAT_ID     = "7661738693"
+SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
+REPLICATE_API_KEY = "r8_9iyZPTUjC8ut9iPVWxDQGvJmxr8lPmk1xRCJY"
 
 SYSTEM_PROMPT = """Ты — консультант компании "Ремонт Загорянка". 
 
@@ -248,6 +249,91 @@ def form():
         )
         send_to_sheets(name, phone, service, source="форма сайта")
     return jsonify({"status": "ok"})
+
+
+STYLE_PROMPTS = {
+    "modern":  "modern minimalist interior design, clean lines, neutral colors, contemporary furniture",
+    "scandi":  "scandinavian interior design, light wood, white walls, cozy minimalist nordic style",
+    "classic": "classic elegant interior design, traditional furniture, warm tones, decorative moldings",
+    "loft":    "loft industrial interior design, exposed brick, metal accents, open space, dark tones",
+}
+
+ROOM_PROMPTS = {
+    "kitchen": "kitchen",
+    "bath":    "bathroom",
+    "living":  "living room",
+    "bedroom": "bedroom",
+    "hall":    "hallway entrance",
+    "dacha":   "country house interior",
+}
+
+import base64
+import time
+
+@app.route("/visualize", methods=["POST"])
+def visualize():
+    try:
+        data = request.json or {}
+        image_b64 = data.get("image")
+        style     = data.get("style", "modern")
+        room      = data.get("room", "living")
+
+        if not image_b64:
+            return jsonify({"error": "no image"}), 400
+
+        style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
+        room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
+        prompt = f"A beautifully renovated {room_text}, {style_text}, professional interior photography, high quality, realistic"
+
+        # Запускаем предсказание через Replicate (flux-kontext — редактирование по фото)
+        run_resp = requests.post(
+            "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions",
+            headers={
+                "Authorization": f"Bearer {REPLICATE_API_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "wait"
+            },
+            json={
+                "input": {
+                    "prompt": prompt,
+                    "input_image": f"data:image/jpeg;base64,{image_b64}",
+                    "output_format": "jpg",
+                    "safety_tolerance": 2
+                }
+            },
+            timeout=120
+        )
+
+        result = run_resp.json()
+        print(f"Replicate response: {result}", flush=True)
+
+        # Если prefer=wait не сработал — поллим
+        if result.get("status") in ("starting", "processing"):
+            pred_id = result.get("id")
+            for _ in range(30):
+                time.sleep(3)
+                poll = requests.get(
+                    f"https://api.replicate.com/v1/predictions/{pred_id}",
+                    headers={"Authorization": f"Bearer {REPLICATE_API_KEY}"}
+                ).json()
+                if poll.get("status") == "succeeded":
+                    result = poll
+                    break
+                if poll.get("status") == "failed":
+                    return jsonify({"error": "generation failed"}), 500
+
+        output = result.get("output")
+        if isinstance(output, list):
+            output = output[0]
+
+        if not output:
+            return jsonify({"error": "no output from model"}), 500
+
+        return jsonify({"image_url": output})
+
+    except Exception as e:
+        print(f"Visualize error: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health", methods=["GET"])
