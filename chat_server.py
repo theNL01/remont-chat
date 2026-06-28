@@ -346,26 +346,31 @@ def visualize():
                         result = poll
                         break
 
-        # Сначала пробуем future_links из первого ответа (там CDN URL)
-        for link in initial_future_links:
-            if link and isinstance(link, str) and not link.endswith('.base64'):
+        # Собираем все ссылки
+        all_links = []
+        for src in [result.get("output"), result.get("future_links"), result.get("proxy_links"), initial_future_links]:
+            if isinstance(src, list):
+                all_links.extend(src)
+            elif isinstance(src, str):
+                all_links.append(src)
+
+        print(f"All links: {all_links}", flush=True)
+
+        for link in all_links:
+            if not link or not isinstance(link, str):
+                continue
+            # Если это .base64 URL — скачиваем и декодируем
+            if link.endswith('.base64'):
+                try:
+                    r = requests.get(link, timeout=30)
+                    b64_content = r.text.strip()
+                    data_url = f"data:image/jpeg;base64,{b64_content}"
+                    return jsonify({"image_url": data_url})
+                except Exception as e:
+                    print(f"Failed to fetch base64: {e}", flush=True)
+                    continue
+            else:
                 return jsonify({"image_url": link})
-
-        output = result.get("output")
-        future_links = result.get("future_links") or result.get("proxy_links")
-
-        def get_valid_url(links):
-            if not links:
-                return None
-            if isinstance(links, list):
-                for l in links:
-                    if l and not l.endswith('.base64'):
-                        return l
-            return None
-
-        url = get_valid_url(future_links) or get_valid_url(output)
-        if url:
-            return jsonify({"image_url": url})
 
         return jsonify({"error": "no output", "detail": result}), 500
 
