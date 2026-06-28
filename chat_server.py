@@ -289,9 +289,9 @@ def visualize():
         if user_prompt:
             prompt += f" IMPORTANT - strictly follow these requirements: {user_prompt}. These details are mandatory and must be clearly visible in the result."
 
-        # Запускаем предсказание через Replicate (flux-kontext — редактирование по фото)
+        # Запускаем предсказание через Replicate (adirik/interior-design — специализированная модель для интерьеров)
         run_resp = requests.post(
-            "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions",
+            "https://api.replicate.com/v1/models/adirik/interior-design/predictions",
             headers={
                 "Authorization": f"Bearer {REPLICATE_API_KEY}",
                 "Content-Type": "application/json",
@@ -299,10 +299,12 @@ def visualize():
             },
             json={
                 "input": {
+                    "image": f"data:image/jpeg;base64,{image_b64}",
                     "prompt": prompt,
-                    "input_image": f"data:image/jpeg;base64,{image_b64}",
-                    "output_format": "jpg",
-                    "safety_tolerance": 2
+                    "negative_prompt": "ugly, blurry, low quality, distorted, deformed",
+                    "guidance_scale": 15,
+                    "prompt_strength": 0.8,
+                    "num_inference_steps": 50
                 }
             },
             timeout=120
