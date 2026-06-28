@@ -232,6 +232,54 @@ def chat():
     return jsonify({"reply": reply})
 
 
+PLANNER_PROMPT = """Ты — AI-ассистент по ремонту в приложении "Планировщик ремонта Загорянка".
+
+Пользователь уже зарегистрирован — не спрашивай имя и контакты, не предлагай оставить заявку.
+
+Твоя задача — помогать с планированием ремонта:
+- Объяснять этапы и очерёдность работ
+- Рассказывать про материалы, их плюсы и минусы
+- Помогать оценить сроки и бюджет
+- Давать советы по выбору стиля и планировки
+- Отвечать на технические вопросы по строительству и отделке
+
+Стиль: коротко и по делу, 2-4 предложения. Только русский язык. Без рекламных фраз и лишних вопросов.
+Если спрашивают про выезд мастера или договор — скажи что это можно оформить на remont-zagoryanka.ru."""
+
+
+@app.route("/planner-chat", methods=["POST"])
+def planner_chat():
+    data = request.json or {}
+    messages = data.get("messages", [])
+    name = data.get("name", "")
+
+    system = PLANNER_PROMPT
+    if name:
+        system += f"\n\nИмя пользователя: {name}. Обращайся по имени естественно, не в каждом сообщении."
+
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": full_messages,
+            "max_tokens": 400,
+            "temperature": 0.6
+        }
+    )
+
+    result = response.json()
+    if "choices" not in result:
+        return jsonify({"reply": "Сервис временно недоступен."})
+    reply = result["choices"][0]["message"]["content"]
+    return jsonify({"reply": reply})
+
+
 @app.route("/form", methods=["POST"])
 def form():
     data = request.json or {}
