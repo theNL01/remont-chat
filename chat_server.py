@@ -275,19 +275,15 @@ def visualize():
     try:
         data = request.json or {}
         image_b64   = data.get("image")
-        style       = data.get("style", "modern")
-        room        = data.get("room", "living")
         user_prompt = data.get("user_prompt", "").strip()
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
 
-        style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
-        room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
+        if not user_prompt:
+            user_prompt = "modern interior design, bright and cozy atmosphere"
 
-        prompt = f"Renovate this {room_text} in {style_text} style. Professional interior photography, high quality, photorealistic result."
-        if user_prompt:
-            prompt += f" IMPORTANT - strictly follow these requirements: {user_prompt}. These details are mandatory and must be clearly visible in the result."
+        prompt = f"Renovate this room. {user_prompt}. Professional interior photography, high quality, photorealistic result."
 
         # Запускаем предсказание через Replicate (flux-kontext-pro)
         run_resp = requests.post(
