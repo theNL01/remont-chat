@@ -341,6 +341,12 @@ def visualize():
                         break
 
         output = result.get("output")
+        future_links = result.get("future_links") or result.get("proxy_links")
+
+        # Берём публичный URL из future_links если output в base64
+        if future_links and isinstance(future_links, list) and len(future_links) > 0:
+            return jsonify({"image_url": future_links[0]})
+
         if isinstance(output, list) and len(output) > 0:
             return jsonify({"image_url": output[0]})
 
