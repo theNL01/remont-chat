@@ -274,16 +274,20 @@ import time
 def visualize():
     try:
         data = request.json or {}
-        image_b64 = data.get("image")
-        style     = data.get("style", "modern")
-        room      = data.get("room", "living")
+        image_b64   = data.get("image")
+        style       = data.get("style", "modern")
+        room        = data.get("room", "living")
+        user_prompt = data.get("user_prompt", "").strip()
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
 
         style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
         room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
+
         prompt = f"A beautifully renovated {room_text}, {style_text}, professional interior photography, high quality, realistic"
+        if user_prompt:
+            prompt += f". Additional details: {user_prompt}"
 
         # Запускаем предсказание через Replicate (flux-kontext — редактирование по фото)
         run_resp = requests.post(
