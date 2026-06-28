@@ -251,6 +251,15 @@ def form():
     return jsonify({"status": "ok"})
 
 
+COLOR_PROMPTS = {
+    "light":    "light and airy color palette, white and beige tones, bright and open feel",
+    "dark":     "dark and moody color palette, deep charcoal and black tones, dramatic atmosphere",
+    "warm":     "warm color palette, honey, terracotta and amber tones, cozy and inviting",
+    "cool":     "cool color palette, light blue, grey and white tones, calm and serene",
+    "natural":  "natural color palette, sage green, earthy and organic tones, biophilic design",
+    "contrast": "high contrast black and white palette, bold graphic look, striking and modern",
+}
+
 STYLE_PROMPTS = {
     "modern":  "modern minimalist interior design, clean lines, neutral colors, contemporary furniture",
     "scandi":  "scandinavian interior design, light wood, white walls, cozy minimalist nordic style",
@@ -275,15 +284,22 @@ def visualize():
     try:
         data = request.json or {}
         image_b64   = data.get("image")
+        style       = data.get("style", "modern")
+        room        = data.get("room", "living")
+        color       = data.get("color", "")
         user_prompt = data.get("user_prompt", "").strip()
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
 
-        if not user_prompt:
-            user_prompt = "modern interior design, bright and cozy atmosphere"
+        style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
+        room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
+        color_text = COLOR_PROMPTS.get(color, "")
 
-        prompt = f"Renovate this room. {user_prompt}. Professional interior photography, high quality, photorealistic result."
+        prompt = f"Renovate this {room_text} in {style_text} style."
+        if color_text:
+            prompt += f" {color_text}."
+        prompt += " Professional interior photography, high quality, photorealistic result."
 
         # Запускаем предсказание через Replicate (flux-kontext-pro)
         run_resp = requests.post(
