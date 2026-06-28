@@ -12,7 +12,7 @@ import sys
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
 GROQ_API_KEY      = "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"
 TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
@@ -309,7 +309,10 @@ def send_telegram_generation(before_b64, after_bytes, user_prompt):
 
 
 
+@app.route("/visualize", methods=["POST", "OPTIONS"])
 def visualize():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
     try:
         data = request.json or {}
         image_b64   = data.get("image")
