@@ -303,6 +303,30 @@ def visualize():
         negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
 
         # Передаём фото напрямую как base64
+        # Шаг 1: загружаем фото через upload endpoint
+        upload_resp = requests.post(
+            "https://modelslab.com/api/v6/image_editing/upload_image",
+            headers={"Content-Type": "application/json"},
+            json={
+                "key": MODELSLAB_API_KEY,
+                "image": image_b64
+            },
+            timeout=30
+        )
+        upload_data = upload_resp.json()
+        print(f"ModelsLab upload response: {upload_data}", flush=True)
+
+        image_url = None
+        if upload_data.get("status") == "success":
+            image_url = upload_data.get("output") or upload_data.get("link")
+            if isinstance(image_url, list):
+                image_url = image_url[0]
+
+        # Если upload не сработал — передаём base64 напрямую
+        if not image_url:
+            image_url = f"data:image/jpeg;base64,{image_b64}"
+
+        # Шаг 2: генерация
         gen_resp = requests.post(
             "https://modelslab.com/api/v6/interior/make",
             headers={"Content-Type": "application/json"},
@@ -310,8 +334,8 @@ def visualize():
                 "key": MODELSLAB_API_KEY,
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
-                "init_image": image_b64,
-                "base64": True,
+                "init_image": image_url,
+                "base64": False,
                 "strength": 0.8,
                 "guidance_scale": 10,
                 "num_inference_steps": 51,
@@ -343,12 +367,19 @@ def visualize():
         output = result.get("output")
         future_links = result.get("future_links") or result.get("proxy_links")
 
-        # Берём публичный URL из future_links если output в base64
-        if future_links and isinstance(future_links, list) and len(future_links) > 0:
-            return jsonify({"image_url": future_links[0]})
+        # Ищем нормальный публичный URL (не base64)
+        def get_valid_url(links):
+            if not links:
+                return None
+            if isinstance(links, list):
+                for l in links:
+                    if l and not l.endswith('.base64'):
+                        return l
+            return None
 
-        if isinstance(output, list) and len(output) > 0:
-            return jsonify({"image_url": output[0]})
+        url = get_valid_url(future_links) or get_valid_url(output)
+        if url:
+            return jsonify({"image_url": url})
 
         return jsonify({"error": "no output", "detail": result}), 500
 
