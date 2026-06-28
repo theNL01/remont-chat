@@ -421,6 +421,22 @@ def visualize():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.json or {}
+    name   = data.get("name", "")
+    email  = data.get("email", "")
+    source = data.get("source", "сайт")
+    if name and email:
+        send_telegram(
+            f"🆕 *Новая регистрация!*\n\n"
+            f"👤 *Имя:* {name}\n"
+            f"📧 *Email:* {email}\n"
+            f"📍 *Источник:* {source}"
+        )
+    return jsonify({"status": "ok"})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
