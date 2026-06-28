@@ -285,9 +285,9 @@ def visualize():
         style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
         room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
 
-        prompt = f"A beautifully renovated {room_text}, {style_text}, professional interior photography, high quality, realistic"
+        prompt = f"Renovate this {room_text} in {style_text} style. Professional interior photography, high quality, photorealistic result."
         if user_prompt:
-            prompt += f". Additional details: {user_prompt}"
+            prompt += f" IMPORTANT - strictly follow these requirements: {user_prompt}. These details are mandatory and must be clearly visible in the result."
 
         # Запускаем предсказание через Replicate (flux-kontext — редактирование по фото)
         run_resp = requests.post(
