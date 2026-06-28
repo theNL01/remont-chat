@@ -18,7 +18,7 @@ GROQ_API_KEY      = "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"
 TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
 ADMIN_CHAT_ID     = "7661738693"
 SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
-REPLICATE_API_KEY = "r8_9iyZPTUjC8ut9iPVWxDQGvJmxr8lPmk1xRCJY"
+REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
 
 SYSTEM_PROMPT = """Ты — консультант компании "Ремонт Загорянка". 
 
