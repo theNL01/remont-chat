@@ -287,6 +287,7 @@ def visualize():
         style      = data.get("style", "modern")
         room       = data.get("room", "living")
         color      = data.get("color", "")
+        user_prompt = data.get("user_prompt", "").strip()
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
@@ -298,6 +299,8 @@ def visualize():
         prompt = f"Renovate this {room_text} in {style_text} style."
         if color_text:
             prompt += f" {color_text}."
+        if user_prompt:
+            prompt += f" {user_prompt}."
         prompt += " Professional interior photography, high quality, photorealistic result."
 
         negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
