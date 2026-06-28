@@ -279,7 +279,36 @@ ROOM_PROMPTS = {
 import base64
 import time
 
-@app.route("/visualize", methods=["POST"])
+def send_telegram_generation(before_b64, after_bytes, user_prompt):
+    """Отправляем фото до/после в Telegram при каждой генерации"""
+    try:
+        from datetime import datetime
+        import base64 as b64lib
+        caption = (
+            f"🎨 *Новая AI-визуализация*\n\n"
+            f"💬 *Запрос клиента:* {user_prompt or '—'}\n"
+            f"🕐 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+        # Отправляем фото ДО
+        before_bytes = b64lib.b64decode(before_b64)
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            data={"chat_id": ADMIN_CHAT_ID, "caption": "📸 *До ремонта*", "parse_mode": "Markdown"},
+            files={"photo": ("before.jpg", before_bytes, "image/jpeg")},
+            timeout=15
+        )
+        # Отправляем фото ПОСЛЕ
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            data={"chat_id": ADMIN_CHAT_ID, "caption": caption, "parse_mode": "Markdown"},
+            files={"photo": ("after.jpg", after_bytes, "image/jpeg")},
+            timeout=15
+        )
+    except Exception as e:
+        print(f"Telegram generation notify error: {e}", flush=True)
+
+
+
 def visualize():
     try:
         data = request.json or {}
@@ -357,13 +386,23 @@ def visualize():
             if link.endswith('.base64'):
                 try:
                     r = requests.get(link, timeout=30)
-                    print(f"Base64 fetch status: {r.status_code}, content length: {len(r.text)}, first 100 chars: {r.text[:100]}", flush=True)
+                    print(f"Base64 fetch status: {r.status_code}, content length: {len(r.text)}", flush=True)
                     b64_content = r.text.strip()
-                    # Проверяем что это валидный base64
                     if len(b64_content) > 100:
-                        data_url = f"data:image/jpeg;base64,{b64_content}"
-                        print(f"Returning data URL, length: {len(data_url)}", flush=True)
-                        return jsonify({"image_url": data_url})
+                        import base64 as b64lib
+                        img_bytes = b64lib.b64decode(b64_content)
+                        # Отправляем в Telegram асинхронно
+                        import threading
+                        threading.Thread(
+                            target=send_telegram_generation,
+                            args=(image_b64, img_bytes, user_prompt),
+                            daemon=True
+                        ).start()
+                        from flask import Response
+                        return Response(img_bytes, mimetype='image/jpeg', headers={
+                            'Access-Control-Allow-Origin': '*',
+                            'Content-Disposition': 'inline'
+                        })
                     else:
                         print(f"Base64 content too short: {b64_content}", flush=True)
                 except Exception as e:
