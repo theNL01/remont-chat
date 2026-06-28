@@ -283,25 +283,16 @@ import time
 def visualize():
     try:
         data = request.json or {}
-        image_b64  = data.get("image")
-        style      = data.get("style", "modern")
-        room       = data.get("room", "living")
-        color      = data.get("color", "")
+        image_b64   = data.get("image")
         user_prompt = data.get("user_prompt", "").strip()
 
         if not image_b64:
             return jsonify({"error": "no image"}), 400
 
-        style_text = STYLE_PROMPTS.get(style, STYLE_PROMPTS["modern"])
-        room_text  = ROOM_PROMPTS.get(room, ROOM_PROMPTS["living"])
-        color_text = COLOR_PROMPTS.get(color, "")
+        if not user_prompt:
+            user_prompt = "modern interior design, bright and cozy"
 
-        prompt = f"Renovate this {room_text} in {style_text} style."
-        if color_text:
-            prompt += f" {color_text}."
-        if user_prompt:
-            prompt += f" {user_prompt}."
-        prompt += " Professional interior photography, high quality, photorealistic result."
+        prompt = f"{user_prompt}. Professional interior photography, high quality, photorealistic result."
 
         negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
 
