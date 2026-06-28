@@ -302,37 +302,19 @@ def visualize():
 
         negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
 
-        # Шаг 1: загружаем изображение на ModelsLab через upload API
-        upload_resp = requests.post(
-            "https://modelslab.com/api/v6/realtime/upload",
-            headers={"Content-Type": "application/json"},
-            json={
-                "key": MODELSLAB_API_KEY,
-                "image": image_b64
-            },
-            timeout=30
-        )
-        upload_data = upload_resp.json()
-        print(f"ModelsLab upload response: {upload_data}", flush=True)
-
-        image_url = upload_data.get("link") or upload_data.get("url") or upload_data.get("output")
-        if not image_url:
-            # Если upload не сработал — пробуем передать base64 напрямую
-            image_url = f"data:image/jpeg;base64,{image_b64}"
-
-        # Шаг 2: вызываем Room Decorator
+        # Передаём фото напрямую как base64
         gen_resp = requests.post(
-            "https://modelslab.com/api/v6/interior/room_decorator",
+            "https://modelslab.com/api/v6/interior/make",
             headers={"Content-Type": "application/json"},
             json={
                 "key": MODELSLAB_API_KEY,
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
-                "init_image": image_url,
+                "init_image": image_b64,
+                "base64": True,
                 "strength": 0.8,
                 "guidance_scale": 10,
                 "num_inference_steps": 51,
-                "base64": False,
                 "temp": False,
                 "seed": 0
             },
