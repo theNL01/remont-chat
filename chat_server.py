@@ -357,9 +357,15 @@ def visualize():
             if link.endswith('.base64'):
                 try:
                     r = requests.get(link, timeout=30)
+                    print(f"Base64 fetch status: {r.status_code}, content length: {len(r.text)}, first 100 chars: {r.text[:100]}", flush=True)
                     b64_content = r.text.strip()
-                    data_url = f"data:image/jpeg;base64,{b64_content}"
-                    return jsonify({"image_url": data_url})
+                    # Проверяем что это валидный base64
+                    if len(b64_content) > 100:
+                        data_url = f"data:image/jpeg;base64,{b64_content}"
+                        print(f"Returning data URL, length: {len(data_url)}", flush=True)
+                        return jsonify({"image_url": data_url})
+                    else:
+                        print(f"Base64 content too short: {b64_content}", flush=True)
                 except Exception as e:
                     print(f"Failed to fetch base64: {e}", flush=True)
                     continue
