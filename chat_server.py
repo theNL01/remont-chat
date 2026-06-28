@@ -434,6 +434,15 @@ def register():
             f"📧 *Email:* {email}\n"
             f"📍 *Источник:* {source}"
         )
+        try:
+            requests.post(SHEETS_URL, json={
+                "type": "register",
+                "name": name,
+                "email": email,
+                "source": source
+            }, timeout=10)
+        except Exception as e:
+            print(f"Sheets register error: {e}")
     return jsonify({"status": "ok"})
 
 
