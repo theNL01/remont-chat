@@ -155,6 +155,107 @@ def format_history(messages):
     return "\n".join(lines)
 
 
+INTERVIEW_PROMPT = """Ты — AI-ассистент планировщика ремонта компании "Ремонт Загорянка".
+
+Твоя задача — провести intake-интервью с клиентом, чтобы собрать все необходимые данные для планирования ремонта.
+
+Веди диалог естественно, как опытный проектный менеджер. Задавай только ОДИН вопрос за раз. Слушай внимательно и уточняй детали.
+
+Собери следующую информацию (в естественном порядке, не анкетой):
+1. Тип объекта (дом, квартира, дача, веранда)
+2. Адрес или район
+3. Площадь объекта / помещений
+4. Текущее состояние (черновая отделка, жилое, после сноса и т.д.)
+5. Какие помещения и виды работ нужны
+6. Пожелания по стилю, референсы
+7. Ориентировочный бюджет
+8. Желаемые сроки начала и завершения
+9. Есть ли планировка, чертежи, замеры — предложи прислать
+
+Принимай фотографии от клиента — благодари и комментируй кратко.
+
+Стиль: тепло, профессионально, только русский язык. 2-3 предложения + один вопрос.
+
+Когда собрано достаточно данных (минимум: тип объекта, площадь, виды работ) — завверши интервью фразой подведения итогов и добавь в конце структурированный тег:
+[ПРОЕКТ: object=ТИП_ОБЪЕКТА, area=ПЛОЩАДЬ, condition=СОСТОЯНИЕ, works=ВИДЫ_РАБОТ, style=СТИЛЬ, budget=БЮДЖЕТ, timeline=СРОКИ]
+
+После тега предложи сохранить проект и перейти к детальному планированию.
+
+В конце КАЖДОГО ответа (кроме финального с тегом) добавляй варианты быстрых ответов:
+[ВАРИАНТЫ: вариант1 | вариант2 | вариант3]
+
+Варианты должны быть короткими (2-5 слов) и помогать клиенту быстро ответить на заданный вопрос."""
+
+
+@app.route("/interview", methods=["POST", "OPTIONS"])
+def interview():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    data = request.json or {}
+    messages = data.get("messages", [])
+    name = data.get("name", "")
+    is_first = data.get("is_first", False)
+
+    system = INTERVIEW_PROMPT
+    if name:
+        system += f"\n\nИмя клиента: {name}. В первом сообщении поприветствуй его по имени тепло и представься как AI-консультант по планированию ремонта. Затем сразу начни с первого вопроса."
+
+    if is_first:
+        messages = []
+
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": full_messages,
+            "max_tokens": 500,
+            "temperature": 0.65
+        }
+    )
+
+    result = response.json()
+    if "choices" not in result:
+        return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
+
+    reply = result["choices"][0]["message"]["content"]
+
+    # Парсим варианты
+    variants = []
+    if "[ВАРИАНТЫ:" in reply:
+        try:
+            v_start = reply.index("[ВАРИАНТЫ:")
+            v_end = reply.index("]", v_start)
+            v_str = reply[v_start+10:v_end].strip()
+            variants = [v.strip() for v in v_str.split("|") if v.strip()]
+            reply = reply[:v_start].strip()
+        except Exception:
+            pass
+
+    # Парсим проект
+    project = None
+    if "[ПРОЕКТ:" in reply:
+        try:
+            p_start = reply.index("[ПРОЕКТ:")
+            p_end = reply.index("]", p_start)
+            p_str = reply[p_start+8:p_end].strip()
+            project = {}
+            for part in p_str.split(","):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    project[k.strip()] = v.strip()
+            reply = reply[:p_start].strip()
+        except Exception:
+            pass
+
+    return jsonify({"reply": reply, "variants": variants, "project": project})
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.json
@@ -243,7 +344,7 @@ PLANNER_PROMPT = """Ты — AI-ассистент по ремонту в при
 - Давать советы по выбору стиля и планировки
 - Отвечать на технические вопросы по строительству и отделке
 
-Стиль: честно и по делу, 3-5 предложений. Только русский язык. Без рекламных фраз.
+Стиль: честно и по делу, 3-5 предложений. ТОЛЬКО русский язык — никаких английских слов, даже технических терминов. "Стандарт" а не "standard", "эконом" а не "economy", "отопление" а не "heating". Без рекламных фраз.
 Если спрашивают про выезд мастера или договор — скажи что это можно оформить на remont-zagoryanka.ru.
 
 ВАЖНО: В конце КАЖДОГО ответа добавляй блок с тремя вариантами следующего вопроса в таком формате:
