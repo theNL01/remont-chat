@@ -246,6 +246,28 @@ def interview():
 
     result = response.json()
     print(f"Groq interview status: {response.status_code}, result: {result}", flush=True)
+
+    # Fallback на меньшую модель если rate limit
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        if error_code == "rate_limit_exceeded":
+            print("Rate limit exceeded, trying fallback model...", flush=True)
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": full_messages,
+                    "max_tokens": 500,
+                    "temperature": 0.65
+                }
+            )
+            result = response.json()
+            print(f"Fallback result: {result}", flush=True)
+
     if "choices" not in result:
         error_msg = result.get("error", {}).get("message", str(result))
         print(f"Groq interview error: {error_msg}", flush=True)
@@ -308,6 +330,15 @@ def chat():
     result = response.json()
     print(f"Groq response status: {response.status_code}", flush=True)
     print(f"Groq response: {result}", flush=True)
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        if error_code == "rate_limit_exceeded":
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": full_messages, "max_tokens": 400, "temperature": 0.5}
+            )
+            result = response.json()
     if "choices" not in result:
         error_msg = result.get("error", {}).get("message", "неизвестная ошибка")
         print(f"Groq error: {error_msg}", flush=True)
@@ -408,6 +439,15 @@ def planner_chat():
     )
 
     result = response.json()
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        if error_code == "rate_limit_exceeded":
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": full_messages, "max_tokens": 400, "temperature": 0.6}
+            )
+            result = response.json()
     if "choices" not in result:
         return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
     reply = result["choices"][0]["message"]["content"]
