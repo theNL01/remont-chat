@@ -245,7 +245,10 @@ def interview():
     )
 
     result = response.json()
+    print(f"Groq interview status: {response.status_code}, result: {result}", flush=True)
     if "choices" not in result:
+        error_msg = result.get("error", {}).get("message", str(result))
+        print(f"Groq interview error: {error_msg}", flush=True)
         return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
 
     reply = result["choices"][0]["message"]["content"]
