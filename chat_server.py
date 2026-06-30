@@ -81,6 +81,75 @@ def build_services_block():
 def build_system_prompt():
     return SYSTEM_PROMPT_TEMPLATE.replace("{{УСЛУГИ_И_ЦЕНЫ}}", build_services_block())
 
+
+# === Расчёт сметы по видам работ для итоговой карточки проекта ===
+
+WORK_KEYWORDS = [
+    ("remont_pod_klyuch", ["под ключ"]),
+    ("vannaya",           ["ванна", "санузел", "туалет"]),
+    ("elektrika",         ["электрик", "проводк", "розетк", "освещен"]),
+    ("santehnika",        ["сантехник", "труб", "водоснабжен", "канализац"]),
+    ("otoplenie",         ["отоплен", "радиатор", "котёл", "котел", "тёплый пол", "теплый пол"]),
+    ("poly",              ["пол", "ламинат", "паркет", "линолеум", "стяжк"]),
+    ("steny_potolki",     ["стен", "потолк", "штукатур", "шпатлёвк", "шпатлевк", "обои", "покраск", "гипсокартон"]),
+    ("fasad_krovlya",     ["фасад", "кровл", "крыш"]),
+    ("dacha",             ["дача", "веранда", "террас"]),
+]
+
+
+def _parse_area(area_str):
+    if not area_str:
+        return None
+    m = re.search(r'(\d+(?:[.,]\d+)?)', str(area_str))
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def calculate_estimate(project):
+    """Возвращает (items, total) — построчную смету по видам работ,
+    упомянутым клиентом, на основе текущих цен из таблицы."""
+    works_text = (project.get("works") or "").lower()
+    area = _parse_area(project.get("area", ""))
+    prices_by_key = {p["key"]: p for p in get_prices()}
+
+    items = []
+    total = 0
+
+    # Если упомянут "ремонт под ключ" - считаем по нему одному, без дробления
+    if any(kw in works_text for kw in ["под ключ"]) and "remont_pod_klyuch" in prices_by_key and area:
+        p = prices_by_key["remont_pod_klyuch"]
+        amount = round(area * p["price"])
+        return [{"category": p["category"], "basis": f"{area:g} м² × {_format_price(p['price'])} ₽/м²", "amount": amount}], amount
+
+    matched = set()
+    for key, keywords in WORK_KEYWORDS:
+        if key == "remont_pod_klyuch" or key in matched:
+            continue
+        if not any(kw in works_text for kw in keywords):
+            continue
+        p = prices_by_key.get(key)
+        if not p:
+            continue
+        if p["unit"] == "м²" and area:
+            amount = round(area * p["price"])
+            basis = f"{area:g} м² × {_format_price(p['price'])} ₽/м²"
+        elif p["unit"] == "точка":
+            count = max(round(area / 8), 1) if area else 5
+            amount = round(count * p["price"])
+            basis = f"≈{count} точек × {_format_price(p['price'])} ₽ (уточнит выезд мастера)"
+        else:  # услуга — фиксированная цена
+            amount = p["price"]
+            basis = "фиксированная цена услуги"
+        items.append({"category": p["category"], "basis": basis, "amount": amount})
+        total += amount
+        matched.add(key)
+
+    return items, total
+
 # Модели OpenRouter
 OPENROUTER_MODELS = [
     "anthropic/claude-sonnet-4-6",
@@ -377,6 +446,11 @@ def interview():
                     k, v = part.split("=", 1)
                     project[k.strip()] = v.strip()
             reply = reply[:p_start].strip()
+
+            # Расчёт сметы по видам работ на основе актуальных цен из таблицы
+            estimate_items, estimate_total = calculate_estimate(project)
+            project["estimate_items"] = estimate_items
+            project["estimate_total"] = estimate_total
         except Exception:
             pass
 
