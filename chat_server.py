@@ -82,6 +82,110 @@ def build_system_prompt():
     return SYSTEM_PROMPT_TEMPLATE.replace("{{УСЛУГИ_И_ЦЕНЫ}}", build_services_block())
 
 
+# === Детерминированный поиск точной цены по сообщению клиента ===
+# Цель: не давать модели "угадывать" или смешивать похожие позиции прайса.
+# Сервер сам ищет совпадение по словам и передаёт модели готовый точный факт.
+
+RU_STOPWORDS = {
+    "и", "в", "на", "с", "к", "от", "до", "по", "за", "для", "или", "что",
+    "как", "это", "мне", "нам", "вам", "нужно", "нужен", "нужна", "нужны",
+    "будет", "будут", "стоит", "стоить", "сколько", "цена", "цены", "стоимость",
+    "один", "одна", "одно", "одного", "одной", "метр", "метра", "метров",
+    "под", "про", "все", "всей", "всего", "квадратного", "квадратный", "квадрат",
+}
+
+
+def _tokenize(text):
+    return [w for w in re.findall(r'[а-яёa-z]+', (text or "").lower()) if len(w) >= 3 and w not in RU_STOPWORDS]
+
+
+def _words_match(w1, w2):
+    """Сравнивает два слова с учётом русских окончаний, но не путает разные
+    по смыслу слова с общим корнем (например 'электрика' и 'электропроводка')."""
+    if abs(len(w1) - len(w2)) > 3:
+        return False
+    n = min(len(w1), len(w2))
+    cut = max(3, n - 1)  # сравниваем всё кроме последней буквы - грубая нормализация окончания
+    cut = min(cut, n)
+    return w1[:cut] == w2[:cut]
+
+
+def find_price_matches(message, prices, max_candidates=3):
+    """Ищет в сообщении клиента однозначное совпадение с конкретными позициями
+    прайса. Возвращает список словарей-позиций при уверенном совпадении,
+    иначе пустой список (значит - не угадываем, просим модель уточнить)."""
+    msg_words = _tokenize(message)
+    if not msg_words:
+        return []
+
+    item_words = {}
+    word_doc_freq = {}
+    for p in prices:
+        words = set(_tokenize(p.get("category", "")))
+        item_words[p["key"]] = words
+        for w in words:
+            word_doc_freq[w] = word_doc_freq.get(w, 0) + 1
+
+    # слова, встречающиеся в слишком многих категориях (например "демонтаж",
+    # "монтаж", "установка") - слишком общие, чтобы однозначно опознать позицию
+    generic_threshold = max(4, int(len(prices) * 0.12))
+    generic_words = {w for w, c in word_doc_freq.items() if c >= generic_threshold}
+
+    def _count_matches(item_word_set, against_generic):
+        count = 0
+        for iw in item_word_set:
+            if any(_words_match(iw, mw) for mw in msg_words):
+                count += 1
+        return count
+
+    scored = []
+    for p in prices:
+        words = item_words[p["key"]]
+        specific = words - generic_words
+        generic = words & generic_words
+        specific_score = _count_matches(specific, False)
+        generic_score = _count_matches(generic, True)
+        if specific_score == 0:
+            continue
+        final_score = specific_score * 10 + generic_score
+        scored.append((final_score, p))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda x: -x[0])
+    top_score = scored[0][0]
+    candidates = [p for score, p in scored if score == top_score]
+
+    if len(candidates) > max_candidates:
+        return []  # слишком размыто - пусть лучше уточнит, чем угадывает
+
+    return candidates
+
+
+def build_price_match_hint(last_user_message, prices):
+    """Возвращает текстовую вставку для системного промпта с точными цифрами,
+    если в последнем сообщении клиента есть уверенное совпадение с прайсом."""
+    matches = find_price_matches(last_user_message, prices)
+    if not matches:
+        return ""
+
+    lines = [f"- {m['category']} - ровно {_format_price(m['price'])} ₽/{m['unit']}" for m in matches]
+    return (
+        "\n\nВАЖНО - в последнем сообщении клиента обнаружен прямой вопрос о цене "
+        "следующей конкретной позиции (или позиций) из прайса. Используй ТОЛЬКО эти "
+        "точные цифры для ответа на вопрос о цене, не пересчитывай, не комбинируй с "
+        "другими позициями и не округляй по-своему:\n" + "\n".join(lines)
+    )
+
+
+def last_user_text(messages):
+    for m in reversed(messages or []):
+        if m.get("role") == "user":
+            return m.get("content", "")
+    return ""
+
+
 # === Расчёт сметы по видам работ для итоговой карточки проекта ===
 
 WORK_KEYWORDS = [
@@ -408,6 +512,8 @@ def interview():
     if name:
         system += f"\n\nИмя клиента: {name}. Первое сообщение должно быть EXACTLY: 'Привет, {name}! Я AI-консультант по планированию ремонта.' - затем с новой строки сразу первый вопрос про тип объекта. Ничего лишнего."
 
+    system += build_price_match_hint(last_user_text(messages), get_prices())
+
     if is_first:
         messages = []
 
@@ -462,7 +568,8 @@ def chat():
     data = request.json
     messages = data.get("messages", [])
 
-    full_messages = [{"role": "system", "content": build_system_prompt()}] + messages
+    system = build_system_prompt() + build_price_match_hint(last_user_text(messages), get_prices())
+    full_messages = [{"role": "system", "content": system}] + messages
 
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -574,6 +681,8 @@ def planner_chat():
     system = PLANNER_PROMPT.replace("{{УСЛУГИ_И_ЦЕНЫ}}", build_services_block())
     if name:
         system += f"\n\nИмя пользователя: {name}. Обращайся по имени естественно, не в каждом сообщении."
+
+    system += build_price_match_hint(last_user_text(messages), get_prices())
 
     full_messages = [{"role": "system", "content": system}] + messages
 
