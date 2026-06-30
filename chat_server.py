@@ -15,12 +15,19 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
-GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "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")
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-TELEGRAM_TOKEN     = os.environ.get("TELEGRAM_TOKEN", "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw")
-ADMIN_CHAT_ID      = os.environ.get("ADMIN_CHAT_ID", "7661738693")
-SHEETS_URL         = os.environ.get("SHEETS_URL", "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec")
+TELEGRAM_TOKEN     = os.environ.get("TELEGRAM_TOKEN", "")
+ADMIN_CHAT_ID      = os.environ.get("ADMIN_CHAT_ID", "")
+SHEETS_URL         = os.environ.get("SHEETS_URL", "")
 MODELSLAB_API_KEY  = os.environ.get("MODELSLAB_API_KEY", "")
+
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY not set in environment", flush=True)
+if not TELEGRAM_TOKEN:
+    print("WARNING: TELEGRAM_TOKEN not set in environment", flush=True)
+if not SHEETS_URL:
+    print("WARNING: SHEETS_URL not set in environment", flush=True)
 
 # Модели OpenRouter
 OPENROUTER_MODELS = [
@@ -220,7 +227,7 @@ INTERVIEW_PROMPT = """Ты - AI-консультант по планирован
 - Писать демагогию и общие фразы
 - Спрашивать точный адрес
 - Задавать больше одного вопроса за раз
-- Использовать английские слова
+- Использовать любые нерусские символы: английские слова, китайские иероглифы, любые другие алфавиты или письменности. Только кириллица, цифры и стандартная пунктуация (точка, запятая, тире, вопросительный и восклицательный знаки).
 
 КАК НАДО отвечать (примеры):
 Клиент: "дом" → Бот: "Какая площадь?"
@@ -294,6 +301,9 @@ def interview():
 
     if not reply:
         return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
+
+    # Страховка: убираем китайские, японские, корейские и прочие нерусские символы
+    reply = re.sub(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+', '', reply)
 
     # Парсим варианты
     variants = []
