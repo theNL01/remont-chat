@@ -15,11 +15,65 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
-GROQ_API_KEY      = "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"
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "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")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
 ADMIN_CHAT_ID     = "7661738693"
 SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
 MODELSLAB_API_KEY = os.environ.get("MODELSLAB_API_KEY", "")
+
+# Модели OpenRouter
+OPENROUTER_MODELS = [
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-opus-4-7",
+    "openai/gpt-4o-mini",
+    "openai/gpt-5.4-mini",
+    "google/gemini-flash-1.5",
+]
+
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768",
+]
+
+def call_llm(messages, model="anthropic/claude-sonnet-4-6", max_tokens=500, temperature=0.65):
+    """Универсальный вызов LLM - OpenRouter или Groq"""
+    if model in GROQ_MODELS:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        )
+    else:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://remont-zagoryanka.ru",
+                "X-Title": "Remont Zagoryanka"
+            },
+            json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        )
+    result = response.json()
+    print(f"LLM call model={model} status={response.status_code}", flush=True)
+
+    # Fallback на Groq если OpenRouter недоступен
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        print(f"LLM error: {result.get('error', result)}", flush=True)
+        if model not in GROQ_MODELS:
+            print("Falling back to Groq...", flush=True)
+            return call_llm(messages, "llama-3.3-70b-versatile", max_tokens, temperature)
+        # Fallback на маленькую модель Groq
+        if error_code == "rate_limit_exceeded" and model != "llama-3.1-8b-instant":
+            return call_llm(messages, "llama-3.1-8b-instant", max_tokens, temperature)
+        return None
+
+    return result["choices"][0]["message"]["content"]
 
 SYSTEM_PROMPT = """Ты - консультант компании "Ремонт Загорянка". 
 
@@ -220,6 +274,12 @@ def interview():
     messages = data.get("messages", [])
     name = data.get("name", "")
     is_first = data.get("is_first", False)
+    model = data.get("model", "anthropic/claude-sonnet-4-6")
+
+    # Whitelist допустимых моделей
+    allowed_models = GROQ_MODELS + OPENROUTER_MODELS
+    if model not in allowed_models:
+        model = "anthropic/claude-sonnet-4-6"
 
     system = INTERVIEW_PROMPT
     if name:
@@ -230,50 +290,10 @@ def interview():
 
     full_messages = [{"role": "system", "content": system}] + messages
 
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "llama-3.3-70b-versatile",
-            "messages": full_messages,
-            "max_tokens": 500,
-            "temperature": 0.65
-        }
-    )
+    reply = call_llm(full_messages, model=model, max_tokens=500, temperature=0.65)
 
-    result = response.json()
-    print(f"Groq interview status: {response.status_code}, result: {result}", flush=True)
-
-    # Fallback на меньшую модель если rate limit
-    if "choices" not in result:
-        error_code = result.get("error", {}).get("code", "")
-        if error_code == "rate_limit_exceeded":
-            print("Rate limit exceeded, trying fallback model...", flush=True)
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "llama-3.1-8b-instant",
-                    "messages": full_messages,
-                    "max_tokens": 500,
-                    "temperature": 0.65
-                }
-            )
-            result = response.json()
-            print(f"Fallback result: {result}", flush=True)
-
-    if "choices" not in result:
-        error_msg = result.get("error", {}).get("message", str(result))
-        print(f"Groq interview error: {error_msg}", flush=True)
+    if not reply:
         return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
-
-    reply = result["choices"][0]["message"]["content"]
 
     # Парсим варианты
     variants = []
