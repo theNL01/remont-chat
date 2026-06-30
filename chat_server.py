@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Чат-сервер для сайта remont-zagoryanka.ru
 """
@@ -8,27 +9,34 @@ import requests
 import re
 import os
 import sys
-import time
 
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
-GROQ_API_KEY      = "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"
-TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
-ADMIN_CHAT_ID     = "7661738693"
-SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
-MODELSLAB_API_KEY = os.environ.get("MODELSLAB_API_KEY", "")
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+TELEGRAM_TOKEN     = os.environ.get("TELEGRAM_TOKEN", "")
+ADMIN_CHAT_ID      = os.environ.get("ADMIN_CHAT_ID", "")
+SHEETS_URL         = os.environ.get("SHEETS_URL", "")
+MODELSLAB_API_KEY  = os.environ.get("MODELSLAB_API_KEY", "")
 
-# URL того же Apps Script (теперь умеет и doPost для заявок, и doGet для прайса)
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY not set in environment", flush=True)
+if not TELEGRAM_TOKEN:
+    print("WARNING: TELEGRAM_TOKEN not set in environment", flush=True)
+if not SHEETS_URL:
+    print("WARNING: SHEETS_URL not set in environment", flush=True)
+
+# === Динамические цены из Google Таблицы ===
+import time
+
 PRICES_URL = os.environ.get("PRICES_URL", SHEETS_URL)
-PRICES_TTL = 300  # секунд — как часто перепроверять таблицу
+PRICES_TTL = 300  # секунд
 
 _prices_cache = {"data": None, "ts": 0}
 
-# Резервные цены — используются только пока ещё ни разу не получилось
-# прочитать таблицу (например, в первые секунды после старта сервера).
 DEFAULT_PRICES = [
     {"key": "remont_pod_klyuch", "category": "Ремонт под ключ",  "unit": "м²",     "price": 2700},
     {"key": "steny_potolki",     "category": "Стены и потолки",  "unit": "м²",     "price": 350},
@@ -43,8 +51,6 @@ DEFAULT_PRICES = [
 
 
 def get_prices():
-    """Цены из таблицы с кэшем на PRICES_TTL секунд. При ошибке — последние
-    успешно полученные данные, а если их ещё не было — дефолтные значения."""
     now = time.time()
     if _prices_cache["data"] and now - _prices_cache["ts"] < PRICES_TTL:
         return _prices_cache["data"]
@@ -68,59 +74,111 @@ def _format_price(value):
 def build_services_block():
     lines = []
     for p in get_prices():
-        lines.append(f"- {p['category']} — от {_format_price(p['price'])} ₽/{p['unit']}")
+        lines.append(f"- {p['category']} - от {_format_price(p['price'])} ₽/{p['unit']}")
     return "\n".join(lines)
 
 
 def build_system_prompt():
     return SYSTEM_PROMPT_TEMPLATE.replace("{{УСЛУГИ_И_ЦЕНЫ}}", build_services_block())
 
+# Модели OpenRouter
+OPENROUTER_MODELS = [
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-opus-4-7",
+    "openai/gpt-4o-mini",
+    "openai/gpt-5.4-mini",
+    "google/gemini-flash-1.5",
+]
 
-SYSTEM_PROMPT_TEMPLATE = """Ты — консультант компании "Ремонт Загорянка". 
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768",
+]
+
+def call_llm(messages, model="anthropic/claude-sonnet-4-6", max_tokens=500, temperature=0.65):
+    """Универсальный вызов LLM - OpenRouter или Groq"""
+    if model in GROQ_MODELS:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        )
+    else:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://remont-zagoryanka.ru",
+                "X-Title": "Remont Zagoryanka"
+            },
+            json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        )
+    result = response.json()
+    print(f"LLM call model={model} status={response.status_code}", flush=True)
+
+    # Fallback на Groq если OpenRouter недоступен
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        print(f"LLM error: {result.get('error', result)}", flush=True)
+        if model not in GROQ_MODELS:
+            print("Falling back to Groq...", flush=True)
+            return call_llm(messages, "llama-3.3-70b-versatile", max_tokens, temperature)
+        # Fallback на маленькую модель Groq
+        if error_code == "rate_limit_exceeded" and model != "llama-3.1-8b-instant":
+            return call_llm(messages, "llama-3.1-8b-instant", max_tokens, temperature)
+        return None
+
+    return result["choices"][0]["message"]["content"]
+
+SYSTEM_PROMPT_TEMPLATE = """Ты - консультант компании "Ремонт Загорянка". 
 
 Стиль общения:
-- Коротко и по делу — не более 2-3 предложений за раз
+- Коротко и по делу - не более 2-3 предложений за раз
 - Грамотный русский язык, вежливо и профессионально
 - Никакой лишней информации которую не спрашивали
 - Не перечисляй преимущества компании без запроса
 - Не добавляй рекламные фразы в конце сообщений
 - Говори естественно, как живой человек
 - НИКОГДА не задавай более одного вопроса в одном сообщении
-- НИКОГДА не используй английские слова — только русский язык
+- НИКОГДА не используй английские слова - только русский язык
 - "Стены" а не "walls", "мессенджер" а не "messenger" и т.д.
 
-ПЕРВОЕ СООБЩЕНИЕ: Если это первое сообщение клиента — попроси его представиться. Например: "Здравствуйте! Как вас зовут?" Только после того как клиент назвал имя — отвечай на его вопрос.
+ПЕРВОЕ СООБЩЕНИЕ: Если это первое сообщение клиента - попроси его представиться. Например: "Здравствуйте! Как вас зовут?" Только после того как клиент назвал имя - отвечай на его вопрос.
 
-ВАЖНО: Ты консультант по ремонту. Если клиент пишет не по теме — вежливо верни к теме ремонта.
+ВАЖНО: Ты консультант по ремонту. Если клиент пишет не по теме - вежливо верни к теме ремонта.
 
 О компании:
 - Ремонт домов, коттеджей и дач под ключ в Загорянке и Щёлковском районе МО
 
 
 География работы:
-Работаем в Загорянке, Образцово и Щёлково. Если клиент из другого места — уточни адрес и скажи что уточнишь возможность выезда.
+Работаем в Загорянке, Образцово и Щёлково. Если клиент из другого места - уточни адрес и скажи что уточнишь возможность выезда.
 
 Услуги и цены:
 {{УСЛУГИ_И_ЦЕНЫ}}
 
-Контакты: +7 (999) 123-45-67, пн–сб 8:00–20:00, Загорянка, Щёлковский р-н МО.
+Контакты: +7 (999) 123-45-67, пн-сб 8:00-20:00, Загорянка, Щёлковский р-н МО.
 
 Как вести диалог:
 1. Первое сообщение → спроси имя
-2. Клиент назвал имя → обратись по имени БЕЗ приветствия, ответь на вопрос и задай ТОЛЬКО ОДИН уточняющий вопрос — что именно нужно сделать. Приветствие только в самом первом сообщении.
+2. Клиент назвал имя → обратись по имени БЕЗ приветствия, ответь на вопрос и задай ТОЛЬКО ОДИН уточняющий вопрос - что именно нужно сделать. Приветствие только в самом первом сообщении.
 3. Клиент рассказал детали → спроси как удобнее связаться, варианты перечисляй на отдельных строках:
-   "Как вам удобнее с нами связаться?\n— Позвонить вам;\n— Перезвонить вам;\n— Написать в мессенджер (WhatsApp/Telegram/Макс);\n— Написать на email?"
+   "Как вам удобнее с нами связаться?\n- Позвонить вам;\n- Перезвонить вам;\n- Написать в мессенджер (WhatsApp/Telegram/Макс);\n- Написать на email?"
 4. В зависимости от выбора спроси только нужное:
-   - Позвонить / Перезвонить → спроси номер телефона коротко, например: "Даша, продиктуйте ваш номер — перезвоним в удобное время."
-   - Мессенджер → спроси username в этом мессенджере. Если клиент написал только название мессенджера (макс, телеграм, ватсап) — это не username, уточни: "Как вас найти в Максе? Напишите ваш номер телефона или username." Не упоминай фото этапов работ.
+   - Позвонить / Перезвонить → спроси номер телефона коротко, например: "Даша, продиктуйте ваш номер - перезвоним в удобное время."
+   - Мессенджер → спроси username в этом мессенджере. Если клиент написал только название мессенджера (макс, телеграм, ватсап) - это не username, уточни: "Как вас найти в Максе? Напишите ваш номер телефона или username." Не упоминай фото этапов работ.
    - Email → спроси email адрес
-5. Клиент дал контакт → скажи естественно, например: "Спасибо, с вами свяжутся в ближайшее время." или "Хорошо, ждите звонка." — и добавь тег в конце ответа
+5. Клиент дал контакт → скажи естественно, например: "Спасибо, с вами свяжутся в ближайшее время." или "Хорошо, ждите звонка." - и добавь тег в конце ответа
 
-Как только клиент назвал имя и дал контакт (телефон, username или email) — ОБЯЗАТЕЛЬНО добавь в самый конец ответа тег:
+Как только клиент назвал имя и дал контакт (телефон, username или email) - ОБЯЗАТЕЛЬНО добавь в самый конец ответа тег:
 [ЗАЯВКА: имя=ИМЯ, контакт=КОНТАКТ, связь=СПОСОБ_СВЯЗИ, услуга=ВИД_РАБОТ, детали=ДЕТАЛИ_РЕМОНТА]
 
-Способ связи необязателен — если не указан пиши "не указан".
-Услуга — вид работ из нашего прайса (например: "Ванная и санузел", "Полы", "Ремонт под ключ"). Детали — площадь, сроки, особенности. Если не рассказал — оставь пустым.
+Способ связи необязателен - если не указан пиши "не указан".
+Услуга - вид работ из нашего прайса (например: "Ванная и санузел", "Полы", "Ремонт под ключ"). Детали - площадь, сроки, особенности. Если не рассказал - оставь пустым.
 Тег должен быть в самом конце, на отдельной строке.
 Не ставь тег если нет имени или контакта. Не придумывай данные."""
 
@@ -203,6 +261,125 @@ def format_history(messages):
     return "\n".join(lines)
 
 
+INTERVIEW_PROMPT = """Ты - AI-консультант по планированию ремонта компании "Ремонт Загорянка".
+
+Веди интервью как живой человек - кратко, естественно, без лишних слов.
+
+СТРОГО ЗАПРЕЩЕНО - за нарушение штраф:
+- Любые восклицания и комплименты в начале ответа: "Отлично!", "Замечательно!", "Хорошо!", "Понятно!", "Дом - это прекрасный объект", "Загорянка - отличное место", "115 метров - это просторно" и ВСЁ подобное
+- Давать оценку ответу клиента ("хороший старт", "интересный выбор" и т.п.)
+- Писать демагогию и общие фразы
+- Спрашивать точный адрес
+- Задавать больше одного вопроса за раз
+- Использовать любые нерусские символы: английские слова, китайские иероглифы, любые другие алфавиты или письменности. Только кириллица, цифры и стандартная пунктуация (точка, запятая, тире, вопросительный и восклицательный знаки).
+
+КАК НАДО отвечать (примеры):
+Клиент: "дом" → Бот: "Какая площадь?"
+Клиент: "загорянка" → Бот: "Какая площадь дома?"
+Клиент: "115" → Бот: "В каком состоянии сейчас - черновая отделка или уже жилое?"
+Клиент: "черновой" → Бот: "Какие помещения планируете ремонтировать?"
+
+КАК НЕ НАДО:
+Клиент: "дом" → Бот: "Дом - это прекрасный объект! Расскажите где он находится?" ← ЗАПРЕЩЕНО
+Клиент: "115" → Бот: "115 метров - это просторно! Теперь давайте..." ← ЗАПРЕЩЕНО
+
+Собери по порядку (в разговоре, не анкетой):
+1. Тип объекта (дом, квартира, дача, веранда)
+2. Сколько комнат в объекте (для веранды не спрашивай) - ОДИН вопрос
+3. Если объект - дом или дача: сколько этажей - ОТДЕЛЬНЫЙ вопрос после ответа на комнаты
+4. Какие из комнат планируется отремонтировать
+4. Если квартира - спроси есть ли в доме грузовой лифт. Объясни коротко зачем: это нужно чтобы понять как будем выносить мусор после демонтажа и завозить материалы. Если грузового лифта нет - спроси на каком этаже квартира. Для дома, дачи или веранды этот вопрос не задавай.
+5. Площадь - объясни что она нужна для расчёта количества материалов и составления сметы. Если клиент не знает площадь всей квартиры/дома - подскажи что её можно найти в квитанции ЖКХ или в документах на квартиру. Если клиент ремонтирует только отдельную комнату и не знает её площадь - объясни как замерить самостоятельно: измерить длину и ширину комнаты в метрах рулеткой и перемножить (например 4м x 3м = 12 кв.м). Если клиент совсем не может указать площадь - предложи бесплатный выезд мастера на замер.
+6. Текущее состояние - черновая отделка или жилое (уже есть отделка, мебель)
+7. Какие пожелания по ремонту — что хотите изменить или обновить? Пусть клиент расскажет своими словами. Только после его ответа уточни конкретные виды работ если нужно. Не перечисляй список работ сразу.
+8. ОБЯЗАТЕЛЬНО попроси фото каждого помещения которое будет ремонтироваться. Объясни клиенту что без фото невозможно понять реальный объём работ: что придётся демонтировать, что вынести, какая планировка, есть ли скрытые проблемы. Без фото не переходи к следующему пункту - мягко но настойчиво напомни если клиент пропускает.
+9. Стиль - предложи прислать референсы или фото примеров которые нравятся
+10. Бюджет
+11. Сроки - если объект квартира, обязательно упомяни что шумные работы в квартирах разрешены только с 9:00 до 19:00 в будни, в выходные действует тихий час. Это влияет на общий срок ремонта.
+12. Планировка или замеры - попроси прислать если есть
+
+Принимай фото - одно слово благодарности и следующий вопрос.
+
+Только русский язык.
+
+Когда собрано достаточно (минимум: тип объекта, площадь, виды работ) - подведи итог одним абзацем и добавь тег:
+[ПРОЕКТ: object=ТИП_ОБЪЕКТА, area=ПЛОЩАДЬ, condition=СОСТОЯНИЕ, works=ВИДЫ_РАБОТ, style=СТИЛЬ, budget=БЮДЖЕТ, timeline=СРОКИ]
+
+В конце каждого ответа (кроме финального с тегом) добавляй:
+[ВАРИАНТЫ: вариант1 | вариант2 | вариант3]
+
+Варианты - 2-5 слов, конкретно под заданный вопрос. ПРОВЕРЯЙ грамматику - никаких опечаток и обрезанных слов ("прислю" → "пришлю позже", "описать" → "опишу словами").
+
+Для вопроса про помещения предлагай варианты под тип объекта:
+- квартира: кухня | ванная и санузел | гостиная | спальня | прихожая | вся квартира целиком
+- дом: кухня | ванная | гостиная | спальня | весь дом целиком
+- дача: комнаты | кухня | веранда | весь домик
+- веранда: вся веранда | часть веранды"""
+
+
+@app.route("/interview", methods=["POST", "OPTIONS"])
+def interview():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    data = request.json or {}
+    messages = data.get("messages", [])
+    name = data.get("name", "")
+    is_first = data.get("is_first", False)
+    model = data.get("model", "anthropic/claude-sonnet-4-6")
+
+    # Whitelist допустимых моделей
+    allowed_models = GROQ_MODELS + OPENROUTER_MODELS
+    if model not in allowed_models:
+        model = "anthropic/claude-sonnet-4-6"
+
+    system = INTERVIEW_PROMPT
+    if name:
+        system += f"\n\nИмя клиента: {name}. Первое сообщение должно быть EXACTLY: 'Привет, {name}! Я AI-консультант по планированию ремонта.' - затем с новой строки сразу первый вопрос про тип объекта. Ничего лишнего."
+
+    if is_first:
+        messages = []
+
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    reply = call_llm(full_messages, model=model, max_tokens=500, temperature=0.65)
+
+    if not reply:
+        return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
+
+    # Страховка: убираем китайские, японские, корейские и прочие нерусские символы
+    reply = re.sub(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+', '', reply)
+
+    # Парсим варианты
+    variants = []
+    if "[ВАРИАНТЫ:" in reply:
+        try:
+            v_start = reply.index("[ВАРИАНТЫ:")
+            v_end = reply.index("]", v_start)
+            v_str = reply[v_start+10:v_end].strip()
+            variants = [v.strip() for v in v_str.split("|") if v.strip()]
+            reply = reply[:v_start].strip()
+        except Exception:
+            pass
+
+    # Парсим проект
+    project = None
+    if "[ПРОЕКТ:" in reply:
+        try:
+            p_start = reply.index("[ПРОЕКТ:")
+            p_end = reply.index("]", p_start)
+            p_str = reply[p_start+8:p_end].strip()
+            project = {}
+            for part in p_str.split(","):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    project[k.strip()] = v.strip()
+            reply = reply[:p_start].strip()
+        except Exception:
+            pass
+
+    return jsonify({"reply": reply, "variants": variants, "project": project})
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.json
@@ -226,7 +403,15 @@ def chat():
 
     result = response.json()
     print(f"Groq response status: {response.status_code}", flush=True)
-    print(f"Groq response: {result}", flush=True)
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        if error_code == "rate_limit_exceeded":
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": full_messages, "max_tokens": 400, "temperature": 0.5}
+            )
+            result = response.json()
     if "choices" not in result:
         error_msg = result.get("error", {}).get("message", "неизвестная ошибка")
         print(f"Groq error: {error_msg}", flush=True)
@@ -280,6 +465,80 @@ def chat():
     return jsonify({"reply": reply})
 
 
+PLANNER_PROMPT = """Ты - AI-ассистент по ремонту в приложении "Планировщик ремонта Загорянка".
+
+Пользователь уже зарегистрирован - не спрашивай имя и контакты, не предлагай оставить заявку.
+
+Твоя задача - помогать с планированием ремонта:
+- Объяснять этапы и очерёдность работ
+- Честно рассказывать про материалы, их плюсы и минусы, реальные цены
+- Помогать оценить сроки и бюджет без прикрас
+- Давать советы по выбору стиля и планировки
+- Отвечать на технические вопросы по строительству и отделке
+
+Стиль: честно и по делу, 3-5 предложений. ТОЛЬКО русский язык - никаких английских слов, даже технических терминов. "Стандарт" а не "standard", "эконом" а не "economy", "отопление" а не "heating". Без рекламных фраз.
+Если спрашивают про выезд мастера или договор - скажи что это можно оформить на remont-zagoryanka.ru.
+
+ВАЖНО: В конце КАЖДОГО ответа добавляй блок с тремя вариантами следующего вопроса в таком формате:
+[ВАРИАНТЫ: вариант1 | вариант2 | вариант3]
+
+Варианты должны быть короткими (3-7 слов), логично продолжать тему разговора и помогать пользователю глубже разобраться в вопросе. Не повторяй уже обсуждённые темы."""
+
+
+@app.route("/planner-chat", methods=["POST"])
+def planner_chat():
+    data = request.json or {}
+    messages = data.get("messages", [])
+    name = data.get("name", "")
+
+    system = PLANNER_PROMPT
+    if name:
+        system += f"\n\nИмя пользователя: {name}. Обращайся по имени естественно, не в каждом сообщении."
+
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": full_messages,
+            "max_tokens": 400,
+            "temperature": 0.6
+        }
+    )
+
+    result = response.json()
+    if "choices" not in result:
+        error_code = result.get("error", {}).get("code", "")
+        if error_code == "rate_limit_exceeded":
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": full_messages, "max_tokens": 400, "temperature": 0.6}
+            )
+            result = response.json()
+    if "choices" not in result:
+        return jsonify({"reply": "Сервис временно недоступен.", "variants": []})
+    reply = result["choices"][0]["message"]["content"]
+
+    variants = []
+    if "[ВАРИАНТЫ:" in reply:
+        try:
+            v_start = reply.index("[ВАРИАНТЫ:")
+            v_end = reply.index("]", v_start)
+            v_str = reply[v_start+10:v_end].strip()
+            variants = [v.strip() for v in v_str.split("|") if v.strip()]
+            reply = reply[:v_start].strip()
+        except Exception:
+            pass
+
+    return jsonify({"reply": reply, "variants": variants})
+
+
 @app.route("/form", methods=["POST"])
 def form():
     data = request.json or {}
@@ -292,16 +551,11 @@ def form():
             f"🔔 *Новая заявка с сайта (форма)!*\n\n"
             f"👤 *Имя:* {name}\n"
             f"📞 *Телефон:* {phone}\n"
-            f"🔧 *Услуга:* {service or '—'}\n"
-            f"💬 *Комментарий:* {comment or '—'}"
+            f"🔧 *Услуга:* {service or '-'}\n"
+            f"💬 *Комментарий:* {comment or '-'}"
         )
         send_to_sheets(name, phone, service, source="форма сайта")
     return jsonify({"status": "ok"})
-
-
-@app.route("/prices", methods=["GET"])
-def prices_endpoint():
-    return jsonify(get_prices())
 
 
 COLOR_PROMPTS = {
@@ -330,6 +584,7 @@ ROOM_PROMPTS = {
 }
 
 import base64
+import time
 
 def send_telegram_generation(before_b64, after_bytes, user_prompt):
     """Отправляем фото до/после в Telegram при каждой генерации"""
@@ -338,7 +593,7 @@ def send_telegram_generation(before_b64, after_bytes, user_prompt):
         import base64 as b64lib
         caption = (
             f"🎨 *Новая AI-визуализация*\n\n"
-            f"💬 *Запрос клиента:* {user_prompt or '—'}\n"
+            f"💬 *Запрос клиента:* {user_prompt or '-'}\n"
             f"🕐 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
         )
         # Отправляем фото ДО
@@ -381,6 +636,7 @@ def visualize():
         negative_prompt = "ugly, blurry, low quality, distorted, deformed, bad anatomy, watermark, text, people, person"
 
         # Передаём фото напрямую как base64
+        # Передаём base64 напрямую
         gen_resp = requests.post(
             "https://modelslab.com/api/v6/interior/make",
             headers={"Content-Type": "application/json"},
@@ -401,12 +657,12 @@ def visualize():
         result = gen_resp.json()
         print(f"ModelsLab room_decorator response: {result}", flush=True)
 
-        # Сохраняем future_links из первого ответа — там CDN URL без .base64
+        # Сохраняем future_links из первого ответа - там CDN URL без .base64
         initial_future_links = result.get("future_links", [])
         if isinstance(initial_future_links, dict):
             initial_future_links = list(initial_future_links.values())
 
-        # Если processing — поллим fetch API
+        # Если processing - поллим fetch API
         if result.get("status") == "processing":
             fetch_url = result.get("fetch_result")
             if fetch_url:
@@ -436,7 +692,7 @@ def visualize():
         for link in all_links:
             if not link or not isinstance(link, str):
                 continue
-            # Если это .base64 URL — скачиваем и декодируем
+            # Если это .base64 URL - скачиваем и декодируем
             if link.endswith('.base64'):
                 try:
                     r = requests.get(link, timeout=30)
@@ -495,6 +751,11 @@ def register():
         except Exception as e:
             print(f"Sheets register error: {e}")
     return jsonify({"status": "ok"})
+
+
+@app.route("/prices", methods=["GET"])
+def prices_endpoint():
+    return jsonify(get_prices())
 
 
 @app.route("/health", methods=["GET"])
