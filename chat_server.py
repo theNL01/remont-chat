@@ -17,10 +17,10 @@ CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS
 
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "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")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-TELEGRAM_TOKEN    = "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw"
-ADMIN_CHAT_ID     = "7661738693"
-SHEETS_URL        = "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec"
-MODELSLAB_API_KEY = os.environ.get("MODELSLAB_API_KEY", "")
+TELEGRAM_TOKEN     = os.environ.get("TELEGRAM_TOKEN", "8824457579:AAHx5V5azuDNW0jasIi9lPufl6HybXPqGHw")
+ADMIN_CHAT_ID      = os.environ.get("ADMIN_CHAT_ID", "7661738693")
+SHEETS_URL         = os.environ.get("SHEETS_URL", "https://script.google.com/macros/s/AKfycby54oO8wY3rzC7RWv56a_PP14BUxqTkZg6VROJF26Ec8zYz97iWa9ihypMOH9BTuviF/exec")
+MODELSLAB_API_KEY  = os.environ.get("MODELSLAB_API_KEY", "")
 
 # Модели OpenRouter
 OPENROUTER_MODELS = [
@@ -349,7 +349,6 @@ def chat():
 
     result = response.json()
     print(f"Groq response status: {response.status_code}", flush=True)
-    print(f"Groq response: {result}", flush=True)
     if "choices" not in result:
         error_code = result.get("error", {}).get("code", "")
         if error_code == "rate_limit_exceeded":
